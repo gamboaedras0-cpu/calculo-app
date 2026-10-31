@@ -8,7 +8,7 @@
  *   POST /api/resolver   { accion: 'proponer', categoria }
  */
 
-const MODELO = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODELO = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const URL_GEMINI = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
 
 // ---------- Esquemas de salida (JSON estructurado) ----------
@@ -81,16 +81,36 @@ async function llamarGemini({ prompt, esquema, temperatura = 0.2 }) {
     const e = new Error('Falta configurar GEMINI_API_KEY en Vercel (Settings → Environment Variables).');
     e.status = 500; throw e;
   }
-  const r = await fetch(URL_GEMINI(MODELO), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SISTEMA }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: temperatura, responseMimeType: 'application/json', responseSchema: esquema }
-    })
-  });
-  const data = await r.json().catch(() => ({}));
+  // Los modelos 3.x "piensan" antes de responder: se limita el razonamiento
+  // y se corta a los 50 s para no dejar la app colgada.
+  const pedir = async (conThinking) => {
+    const generationConfig = { temperature: temperatura, responseMimeType: 'application/json', responseSchema: esquema, maxOutputTokens: 8192 };
+    if (conThinking) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
+    const ctrl = new AbortController();
+    const reloj = setTimeout(() => ctrl.abort(), 50000);
+    try {
+      return await fetch(URL_GEMINI(MODELO), {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SISTEMA }] },
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig
+        })
+      });
+    } catch (err) {
+      const e = new Error(err.name === 'AbortError' ? 'Gemini tardó más de 50 s en responder. Intenta de nuevo.' : `No se pudo conectar con Gemini: ${err.message}`);
+      e.status = 504; throw e;
+    } finally { clearTimeout(reloj); }
+  };
+
+  let r = await pedir(true);
+  let data = await r.json().catch(() => ({}));
+  // Si el modelo no acepta thinkingConfig, se reintenta sin él
+  if (r.status === 400 && /thinking/i.test(data?.error?.message || '')) {
+    r = await pedir(false);
+    data = await r.json().catch(() => ({}));
+  }
   if (!r.ok) {
     const e = new Error(data?.error?.message || `Gemini respondió ${r.status}`);
     e.status = r.status === 429 ? 429 : 502; throw e;

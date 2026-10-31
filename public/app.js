@@ -167,11 +167,13 @@
     const id = ++st.peticion;
     badge('cargando', 'Consultando a Gemini…');
     $('#btn-calcular').disabled = true;
+    const ctrl = new AbortController();
+    const reloj = setTimeout(() => ctrl.abort(), 65000);
     try {
       const r = await fetch('/api/resolver', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
         body: JSON.stringify({ accion: 'resolver', ...p, contexto: st.contexto, referencia: { integral: res.integralTex, valor: Number(res.valor.toPrecision(10)) } })
-      });
+      }).catch((err) => { throw new Error(err.name === 'AbortError' ? 'Gemini tardó demasiado en responder. Presiona Calcular de nuevo.' : 'Sin conexión con el servidor.'); });
       const data = await r.json().catch(() => ({ error: `Respuesta inválida del servidor (${r.status})` }));
       if (id !== st.peticion) return;
       if (!r.ok || data.error) throw new Error(data.error || `Error ${r.status}`);
@@ -184,6 +186,7 @@
       badge('local', 'Resultado local (sin IA)');
       pasosLocales('error', e.message);
     } finally {
+      clearTimeout(reloj);
       if (id === st.peticion) $('#btn-calcular').disabled = false;
     }
   }
