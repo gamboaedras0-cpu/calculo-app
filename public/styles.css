@@ -169,7 +169,9 @@ input.error { border-color: var(--eje); }
 .final p { margin: 4px 0 0; font-size: 14.5px; }
 .cargando { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 10px; background: var(--fondo-2); font-size: 14px; }
 .spin { width: 16px; height: 16px; border: 2px solid var(--borde); border-top-color: var(--acento); border-radius: 50%; animation: gira .8s linear infinite; }
-.error-ia { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 14px; }
+.error-ia { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 14px; display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.reintentar { border: 1px solid currentColor; background: none; color: inherit; border-radius: 9px; padding: 7px 12px; font-weight: 600; white-space: nowrap; }
+.reintentar:hover { background: var(--panel); }
 @keyframes gira { to { transform: rotate(360deg); } }
 @keyframes pulso { 50% { opacity: .3; } }
 

@@ -247,7 +247,8 @@
     if (estado === 'cargando') {
       cont.innerHTML = '<div class="cargando"><span class="spin"></span>Gemini está resolviendo la integral paso a paso…</div>';
     } else {
-      cont.innerHTML = `<div class="error-ia"><b>No se pudo consultar a Gemini:</b> ${esc(error)}<br><small>Se muestra el planteamiento y el resultado del motor numérico local.</small></div>`;
+      cont.innerHTML = `<div class="error-ia"><div><b>No se pudo consultar a Gemini:</b> ${esc(error)}<br><small>Se muestra el planteamiento y el resultado del motor numérico local.</small></div><button class="reintentar">↻ Reintentar con IA</button></div>`;
+      cont.querySelector('.reintentar').onclick = calcular;
     }
     let n = 1;
     cont.appendChild(tarjeta(n++, 'Continuidad', esc(r.continuidad.join(' '))));
@@ -262,7 +263,7 @@
     const resumen = document.createElement('div'); resumen.className = 'resumen-ia';
     resumen.innerHTML = `<div><small>Método</small><b>${esc(d.metodo)}</b></div><div><small>Diferencial</small><b>${esc(d.diferencial)}</b></div><div class="ancho"><small>Continuidad</small><span>${esc(d.continuidad)}</span></div>`;
     texEnLinea(resumen); cont.appendChild(resumen);
-    (d.pasos || []).forEach((p, i) => cont.appendChild(tarjeta(i + 1, p.titulo, esc(p.explicacion).replace(/\n/g, '<br>'), p.latex)));
+    (d.pasos || []).forEach((p, i) => cont.appendChild(tarjeta(i + 1, String(p.titulo || '').replace(/^\s*(paso\s*)?\d+\s*[.):-]\s*/i, ''), esc(p.explicacion).replace(/\n/g, '<br>'), p.latex)));
     const fin = document.createElement('div'); fin.className = 'final';
     fin.innerHTML = `<small>Resultado</small><div class="eq"></div><p>${esc(d.interpretacion)}</p>`;
     tex(fin.querySelector('.eq'), `${d.resultado_exacto_latex} \\approx ${fmt(Number(d.resultado_decimal))}\\ \\text{${esc(d.unidades)}}`);

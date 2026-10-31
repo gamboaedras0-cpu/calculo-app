@@ -8,7 +8,12 @@
  *   POST /api/resolver   { accion: 'proponer', categoria }
  */
 
-const MODELO = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// Modelo principal + respaldos por si está saturado o no disponible para la cuenta.
+// GEMINI_MODEL y GEMINI_RESPALDO (separados por coma) se configuran en Vercel.
+const MODELOS = [...new Set([
+  process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+  ...(process.env.GEMINI_RESPALDO || 'gemini-3.8-flash-lite,gemini-flash-latest,gemini-flash-lite-latest').split(',')
+].map((m) => m.trim()).filter(Boolean))];
 const URL_GEMINI = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
 
 // ---------- Esquemas de salida (JSON estructurado) ----------
@@ -81,15 +86,21 @@ async function llamarGemini({ prompt, esquema, temperatura = 0.2 }) {
     const e = new Error('Falta configurar GEMINI_API_KEY en Vercel (Settings → Environment Variables).');
     e.status = 500; throw e;
   }
-  // Los modelos 3.x "piensan" antes de responder: se limita el razonamiento
-  // y se corta a los 50 s para no dejar la app colgada.
-  const pedir = async (conThinking) => {
+  const limite = Date.now() + 55000;          // Vercel corta la función a los 60 s
+  const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  const sinThinking = new Set();               // modelos que no aceptan thinkingConfig
+
+  // Una sola petición a un modelo. Devuelve { r, data } o lanza si se agotó el tiempo.
+  const pedir = async (modelo) => {
+    const restante = limite - Date.now();
+    if (restante < 3000) { const e = new Error('Tiempo agotado'); e.name = 'AbortError'; throw e; }
     const generationConfig = { temperature: temperatura, responseMimeType: 'application/json', responseSchema: esquema, maxOutputTokens: 8192 };
-    if (conThinking) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
+    // Los modelos 3.x "piensan" antes de responder: razonamiento bajo = respuesta más rápida
+    if (!sinThinking.has(modelo)) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
     const ctrl = new AbortController();
-    const reloj = setTimeout(() => ctrl.abort(), 50000);
+    const reloj = setTimeout(() => ctrl.abort(), Math.min(45000, restante));
     try {
-      return await fetch(URL_GEMINI(MODELO), {
+      const r = await fetch(URL_GEMINI(modelo), {
         method: 'POST', signal: ctrl.signal,
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
         body: JSON.stringify({
@@ -98,26 +109,46 @@ async function llamarGemini({ prompt, esquema, temperatura = 0.2 }) {
           generationConfig
         })
       });
-    } catch (err) {
-      const e = new Error(err.name === 'AbortError' ? 'Gemini tardó más de 50 s en responder. Intenta de nuevo.' : `No se pudo conectar con Gemini: ${err.message}`);
-      e.status = 504; throw e;
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 400 && /thinking/i.test(data?.error?.message || '') && !sinThinking.has(modelo)) {
+        sinThinking.add(modelo);
+        return pedir(modelo);
+      }
+      return { r, data };
     } finally { clearTimeout(reloj); }
   };
 
-  let r = await pedir(true);
-  let data = await r.json().catch(() => ({}));
-  // Si el modelo no acepta thinkingConfig, se reintenta sin él
-  if (r.status === 400 && /thinking/i.test(data?.error?.message || '')) {
-    r = await pedir(false);
-    data = await r.json().catch(() => ({}));
+  // Plan: modelo principal (2 intentos si está saturado) y luego modelos de respaldo
+  const plan = [];
+  MODELOS.forEach((m, i) => { plan.push(m); if (i === 0) plan.push(m); });
+
+  let ultimoError = 'Gemini no respondió';
+  let ultimoStatus = 502;
+  for (let i = 0; i < plan.length; i++) {
+    const modelo = plan[i];
+    let r, data;
+    try { ({ r, data } = await pedir(modelo)); }
+    catch (err) {
+      if (err.name === 'AbortError') { ultimoError = 'Gemini tardó demasiado en responder. Intenta de nuevo.'; ultimoStatus = 504; continue; }
+      ultimoError = `No se pudo conectar con Gemini: ${err.message}`; ultimoStatus = 502; continue;
+    }
+    if (r.ok) {
+      const texto = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+      try { return { datos: JSON.parse(texto), modelo }; }
+      catch { ultimoError = 'Gemini devolvió una respuesta que no es JSON válido.'; ultimoStatus = 502; continue; }
+    }
+    ultimoError = data?.error?.message || `Gemini respondió ${r.status}`;
+    ultimoStatus = r.status === 429 ? 429 : 502;
+    // Saturación o error temporal → pausa corta y siguiente intento.
+    // Modelo inexistente o no disponible → pasa directo al siguiente.
+    const modeloNoDisponible = r.status === 404 || ((r.status === 400 || r.status === 403) && /model/i.test(ultimoError));
+    if ([429, 500, 503].includes(r.status)) await espera(1200);
+    else if (!modeloNoDisponible) break;          // key inválida, etc.: no tiene caso reintentar
   }
-  if (!r.ok) {
-    const e = new Error(data?.error?.message || `Gemini respondió ${r.status}`);
-    e.status = r.status === 429 ? 429 : 502; throw e;
-  }
-  const texto = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-  try { return JSON.parse(texto); }
-  catch { const e = new Error('Gemini devolvió una respuesta que no es JSON válido.'); e.status = 502; throw e; }
+  if (/high demand|overloaded|unavailable/i.test(ultimoError)) ultimoError = 'Gemini está saturado en este momento (alta demanda en los servidores de Google). Espera unos segundos y presiona Calcular de nuevo.';
+  else if (/quota|rate limit|exhausted/i.test(ultimoError)) ultimoError = 'Se alcanzó el límite gratuito de Gemini por minuto. Espera un minuto e intenta de nuevo.';
+  else if (/api key/i.test(ultimoError)) ultimoError = 'La API key de Gemini no es válida. Revisa GEMINI_API_KEY en Vercel.';
+  const e = new Error(ultimoError); e.status = ultimoStatus; throw e;
 }
 
 function promptResolver(b) {
@@ -151,7 +182,7 @@ export default async function handler(req, res) {
   try {
     if (body.accion === 'proponer') {
       const cat = txt(body.categoria || 'cualquier área de ingeniería', 80);
-      const caso = await llamarGemini({
+      const { datos: caso } = await llamarGemini({
         esquema: ESQUEMA_CASO,
         temperatura: 0.9,
         prompt: `Propón un caso REAL y original de ${cat} que se resuelva calculando el volumen de un sólido de revolución.
@@ -162,8 +193,8 @@ Si giras alrededor del eje y usa método "capas" con a >= 0. Si hay hueco interi
     }
 
     if (num(body.a) === null || num(body.b) === null || !body.f) return res.status(400).json({ error: 'Faltan f(x), a o b.' });
-    const sol = await llamarGemini({ prompt: promptResolver(body), esquema: ESQUEMA_SOLUCION });
-    return res.status(200).json({ ...sol, modelo: MODELO });
+    const { datos: sol, modelo } = await llamarGemini({ prompt: promptResolver(body), esquema: ESQUEMA_SOLUCION });
+    return res.status(200).json({ ...sol, modelo });
   } catch (e) {
     return res.status(e.status || 500).json({ error: e.message || 'Error interno' });
   }
