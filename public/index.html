@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Calculo App · Sólidos de Revolución con IA</title>
+  <meta name="description" content="Asistente de áreas bajo la curva y sólidos de revolución, paso a paso con Gemini. Proyecto de Cálculo II." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230b2a5b'/><text x='50%25' y='54%25' font-size='42' text-anchor='middle' dominant-baseline='middle' fill='%237dd3fc' font-family='serif'>∫</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="marca">
+      <span class="logo">∫</span>
+      <div>
+        <h1>Calculo App</h1>
+        <p>Asistente de Sólidos de Revolución con IA</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab activa" data-modo="area" role="tab">Área bajo la curva</button>
+      <button class="tab" data-modo="volumen" role="tab">Sólido de revolución</button>
+      <button class="tab" data-modo="apps" role="tab">Aplicaciones prácticas</button>
+    </nav>
+    <button id="tema" class="icono-btn" title="Cambiar tema" aria-label="Cambiar tema"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></button>
+  </header>
+
+  <!-- ============ CALCULADORA ============ -->
+  <main id="vista-calc" class="layout">
+    <aside class="panel entradas">
+      <div id="contexto-caso" class="contexto oculto"></div>
+
+      <label class="campo">
+        <span>f(x) <small>función superior / perfil</small></span>
+        <input id="in-f" class="mono" value="x^2" spellcheck="false" autocomplete="off" />
+        <div class="tex-preview" id="prev-f"></div>
+      </label>
+
+      <label class="campo">
+        <span>g(x) <small>opcional · curva inferior / hueco</small></span>
+        <input id="in-g" class="mono" placeholder="vacío = eje x" spellcheck="false" autocomplete="off" />
+        <div class="tex-preview" id="prev-g"></div>
+      </label>
+
+      <div class="fila">
+        <label class="campo"><span>a</span><input id="in-a" class="mono" value="0" /></label>
+        <label class="campo"><span>b</span><input id="in-b" class="mono" value="2" /></label>
+        <label class="campo"><span>Unidad</span>
+          <select id="in-u"><option value="u">u</option><option value="cm">cm</option><option value="m">m</option></select>
+        </label>
+      </div>
+
+      <div id="solo-volumen" class="oculto">
+        <div class="campo">
+          <span>Eje de rotación</span>
+          <div class="segmentado" id="seg-eje">
+            <button data-v="x" class="on">Eje X</button>
+            <button data-v="y">Eje Y</button>
+            <button data-v="yc">y = c</button>
+            <button data-v="xc">x = c</button>
+          </div>
+        </div>
+        <label class="campo oculto" id="campo-c"><span>c</span><input id="in-c" class="mono" value="-1" /></label>
+        <div class="campo">
+          <span>Método</span>
+          <div class="segmentado" id="seg-met">
+            <button data-v="discos" class="on">Discos</button>
+            <button data-v="arandelas">Arandelas</button>
+            <button data-v="capas">Capas</button>
+          </div>
+          <p class="nota" id="nota-metodo"></p>
+        </div>
+      </div>
+
+      <button id="btn-calcular" class="primario">Calcular con IA</button>
+      <p class="ayuda">Sintaxis: <code>x^2</code>, <code>sqrt(x)</code>, <code>sin(x)</code>, <code>e^x</code>, <code>log(x)</code>, <code>pi</code>. Los límites aceptan <code>pi/2</code>.</p>
+
+      <div class="ejemplos">
+        <span>Ejemplos rápidos</span>
+        <div id="chips"></div>
+      </div>
+    </aside>
+
+    <section class="resultados">
+      <div class="panel resultado" id="tarjeta-resultado">
+        <div class="res-cabecera">
+          <span class="etiqueta" id="res-etiqueta">Área</span>
+          <span class="badge" id="badge">—</span>
+        </div>
+        <div class="res-valor"><span id="res-num">—</span> <span id="res-u"></span></div>
+        <div class="res-extra" id="res-extra"></div>
+        <div class="res-integral" id="res-integral"></div>
+        <ul class="avisos" id="avisos"></ul>
+      </div>
+
+      <div class="panel grafica">
+        <div class="graf-tabs">
+          <button class="gtab on" data-g="2d">Gráfica 2D</button>
+          <button class="gtab" data-g="3d" id="gtab-3d">Sólido 3D</button>
+          <span class="graf-ayuda" id="graf-ayuda">Puntos ◆ = evaluados por Gemini</span>
+        </div>
+        <div id="plot2d" class="plot"></div>
+        <div id="plot3d" class="plot oculto"></div>
+      </div>
+
+      <div class="panel pasos">
+        <div class="pasos-cab">
+          <h2>Procedimiento paso a paso</h2>
+          <span class="modelo" id="modelo"></span>
+        </div>
+        <div id="pasos-cuerpo" class="pasos-cuerpo">
+          <p class="vacio">Presiona <b>Calcular con IA</b> para ver el desarrollo completo generado por Gemini.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ APLICACIONES ============ -->
+  <main id="vista-apps" class="apps oculto">
+    <div class="apps-intro">
+      <h2>Aplicaciones prácticas</h2>
+      <p>Casos reales modelados con funciones perfil. Elige una plantilla para cargarla en la calculadora, o pide a la IA que invente uno nuevo.</p>
+    </div>
+    <div class="grid-apps" id="grid-apps"></div>
+  </main>
+
+  <footer class="pie">
+    Cálculo II · Ingeniería en Sistemas · Motor de IA: Google Gemini · Verificación numérica: regla de Simpson (n = 10 000)
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/mathjs@13.2.0/lib/browser/math.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+  <script src="calculo.js"></script>
+  <script src="plantillas.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

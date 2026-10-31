@@ -1,0 +1,8 @@
+{
+  "name": "calculo-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Asistente de áreas y sólidos de revolución con IA (Gemini) — Cálculo II",
+  "type": "module",
+  "engines": { "node": ">=18" }
+}
